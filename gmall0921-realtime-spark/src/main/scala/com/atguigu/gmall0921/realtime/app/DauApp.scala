@@ -5,10 +5,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 
 import com.alibaba.fastjson.{JSON, JSONObject}
-import com.atguigu.gmall0921.realtime.utils.{MykafkaUtil, RedisUtil}
+import com.atguigu.gmall0921.realtime.utils.{MykafkaUtil, OffsetManagerUtil, RedisUtil}
 import org.apache.kafka.clients.consumer.ConsumerRecord
+import org.apache.kafka.common.TopicPartition
 import org.apache.spark.SparkConf
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
+import org.apache.spark.streaming.kafka010.{HasOffsetRanges, OffsetRange}
 import org.apache.spark.streaming.{Seconds, StreamingContext}
 import redis.clients.jedis.Jedis
 
@@ -26,16 +28,50 @@ object DauApp {
   3、   得到用户的日活明细后， 方案一： 直接明细保存到某个数据库中   使用OLAP进行统计汇总
                              方案二： 进行统计汇总之后再保存
    */
+
+/*
+  手动后置提交偏移量
+  1读取偏移量初始值
+      从redis中读取偏移量的数据，
+          偏移量在redis中以什么样的格式保存
+          主题-消费者组-分区-offset
+  2加载数据
+     如果能取得偏移量则从偏移量位置取得数据量 否则 从最新的位置取得数据流
+
+  3获得偏移量结束点
+   4存储偏移量
+*/
+
   def main(args: Array[String]): Unit = {
         val sparkConf: SparkConf = new SparkConf().setMaster("local[4]").setAppName("dau_app")
         //1 业务对时效的需求  2 处理业务的计算时间  尽量保证周期内可以处理完当前批次
         val ssc = new StreamingContext(sparkConf,Seconds(5))
         val topic ="ODS_BASE_LOG"
         val groupid="dau_app_group"
-        val inputDstream: InputDStream[ConsumerRecord[String, String]] = MykafkaUtil.getKafkaStream(topic,ssc,groupid)
+
+       val offsetMap: Map[TopicPartition, Long] = OffsetManagerUtil.getOffset(topic,groupid)
+       var inputDstream: InputDStream[ConsumerRecord[String, String]]=null
+      //如果能取得偏移量则从偏移量位置取得数据量 否则 从最新的位置取得数据流
+       if(offsetMap==null ){
+           inputDstream  = MykafkaUtil.getKafkaStream(topic,ssc, groupid)
+       }else{
+           inputDstream  = MykafkaUtil.getKafkaStream(topic,ssc,offsetMap,groupid)
+       }
+     // 3获得偏移量结束点
+      var offsetRanges: Array[OffsetRange]=null //driver ? executor? dr
+      //从流中顺手牵羊把本批次的偏移量结束点存入全局变量中。
+      val inputDstreamWithOffsetDstream: DStream[ConsumerRecord[String, String]] = inputDstream.transform { rdd =>
+        // driver ? executor? dr //在dr中周期性 执行  可以写在 transform中，或者从rdd中提取数据比如偏移量
+        val hasOffsetRanges: HasOffsetRanges = rdd.asInstanceOf[HasOffsetRanges]
+        offsetRanges = hasOffsetRanges.offsetRanges
+        //            rdd.map{a=> //driver ? executor? ex
+        //            }
+        rdd
+      }
+
 
         //把ts 转换成日期 和小时 为后续便于处理
-        val jsonObjDstream: DStream[JSONObject] = inputDstream.map{record=>
+        val jsonObjDstream: DStream[JSONObject] = inputDstreamWithOffsetDstream.map{record=>
           val jsonString: String = record.value()
                 val jSONObject: JSONObject = JSON.parseObject(jsonString)
                //把时间戳转换成 日期和小时字段
@@ -120,10 +156,15 @@ object DauApp {
     dauDstream.foreachRDD{rdd=>
       rdd.foreachPartition{jsonObjItr=>
          //存储jsonObjItr 整体  //dr? ex? ex
-
+        for ( jsonObj<- jsonObjItr ) {
+          println(jsonObj) //假设把数据存储到 容器中
+        }
+        OffsetManagerUtil.saveOffset(topic,groupid,offsetRanges)//1
       }
-    }
+      OffsetManagerUtil.saveOffset(topic,groupid,offsetRanges) //2
 
+    }
+    OffsetManagerUtil.saveOffset(topic,groupid,offsetRanges)//3
 
         ssc.start()
         ssc.awaitTermination()
