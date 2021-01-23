@@ -57,9 +57,10 @@ object DauApp {
        }else{
            inputDstream  = MykafkaUtil.getKafkaStream(topic,ssc,offsetMap,groupid)
        }
-     // 3获得偏移量结束点
-      var offsetRanges: Array[OffsetRange]=null //driver ? executor? dr
-      //从流中顺手牵羊把本批次的偏移量结束点存入全局变量中。
+     // 3获得偏移量结束点  OffsetRange[]
+      var offsetRanges: Array[OffsetRange]=null //driver ? executor? dr  以分区数为长度的数组
+
+      //从流中顺手牵羊把本批次的偏移量结束点存入全局变量中。 ConsumerRecord[K, V]  K是kafka的分区键 V是值
       val inputDstreamWithOffsetDstream: DStream[ConsumerRecord[String, String]] = inputDstream.transform { rdd =>
         // driver ? executor? dr //在dr中周期性 执行  可以写在 transform中，或者从rdd中提取数据比如偏移量
         val hasOffsetRanges: HasOffsetRanges = rdd.asInstanceOf[HasOffsetRanges]
@@ -154,17 +155,28 @@ object DauApp {
    // dauDstream.count().print()
 
     dauDstream.foreachRDD{rdd=>
+//      rdd.foreach{jsonObj=>
+//        println(jsonObj)
+//      }
+
       rdd.foreachPartition{jsonObjItr=>
          //存储jsonObjItr 整体  //dr? ex? ex
         for ( jsonObj<- jsonObjItr ) {
           println(jsonObj) //假设把数据存储到 容器中
         }
-        OffsetManagerUtil.saveOffset(topic,groupid,offsetRanges)//1
+        //批量保存//jsonObjItr 一起保存到容器中
+        //driver ? ex?   ex 每批次 每分区
+      //  OffsetManagerUtil.saveOffset(topic,groupid,offsetRanges)//1
       }
-      OffsetManagerUtil.saveOffset(topic,groupid,offsetRanges) //2
+      //driver ? ex? d 周期性执行
+      //2在driver存储driver全局数据 ，每个批次保存一次偏移量
+      OffsetManagerUtil.saveOffset(topic,groupid,offsetRanges)
 
+      println("AAAA")
     }
-    OffsetManagerUtil.saveOffset(topic,groupid,offsetRanges)//3
+    //driver ? ex? d 只执行一次
+    //OffsetManagerUtil.saveOffset(topic,groupid,offsetRanges)//3
+    println("BBBB")  // 在控制台中先打印A还是先打印B
 
         ssc.start()
         ssc.awaitTermination()
@@ -172,3 +184,5 @@ object DauApp {
   }
 
 }
+// 1 理解： 能够是到 每行都是干什么用的  用到的时候 知道把哪行 粘到 你的类中什么地方
+// 2 微调： 要会调试  比如要把偏移量保存在mysql  你能不能改？

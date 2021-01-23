@@ -18,6 +18,7 @@ object OffsetManagerUtil {
       // redis  type? hash  key? topic:consumer_group     field?  partition  value? offset   expire? no  api?  hgetall
       val offsetKey=topic+":"+groupId
       val offsetMapOrigin: util.Map[String, String] = jedis.hgetAll(offsetKey)
+
     jedis.close()
       if(offsetMapOrigin!=null&&offsetMapOrigin.size()>0){
           import  collection.JavaConverters._
@@ -25,7 +26,9 @@ object OffsetManagerUtil {
           val offsetMapForKafka: Map[TopicPartition, Long] = offsetMapOrigin.asScala.map { case (partitionStr, offsetStr) =>
             val topicPartition: TopicPartition = new TopicPartition(topic, partitionStr.toInt)
             (topicPartition, offsetStr.toLong)
+
           }.toMap
+        println("读取起始偏移量：："+offsetMapForKafka)
         offsetMapForKafka
     }else{
          null
@@ -53,6 +56,7 @@ object OffsetManagerUtil {
       offsetMapForRedis.put(partition.toString,offset.toString)
     }
     //写入redis
+    println("写入偏移量结束点："+offsetMapForRedis)
     jedis.hmset(offsetKey,offsetMapForRedis)
     jedis.close()
   }
