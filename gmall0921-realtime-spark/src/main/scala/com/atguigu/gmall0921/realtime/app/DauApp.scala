@@ -129,7 +129,7 @@ object DauApp {
     //优化过 ： 优化目的 减少创建（获取）连接的次数 ，做成每批次每分区 执行一次
     val dauDstream: DStream[JSONObject] = firstPageJsonObjDstream.mapPartitions { jsonObjItr =>
       val jedis = RedisUtil.getJedisClient //该批次 该分区 执行一次
-    val filteredList: ListBuffer[JSONObject] = ListBuffer[JSONObject]()
+      val filteredList: ListBuffer[JSONObject] = ListBuffer[JSONObject]()
       for (jsonObj <- jsonObjItr) { //条为单位处理
         //提取对象中的mid
         val mid: String = jsonObj.getJSONObject("common").getString("mid")
