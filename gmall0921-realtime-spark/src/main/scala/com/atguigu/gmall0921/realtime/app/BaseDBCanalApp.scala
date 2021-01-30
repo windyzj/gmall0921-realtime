@@ -1,7 +1,9 @@
 package com.atguigu.gmall0921.realtime.app
 
+import java.util
+
 import com.alibaba.fastjson.{JSON, JSONArray, JSONObject}
-import com.atguigu.gmall0921.realtime.utils.{MykafkaSink, MykafkaUtil, OffsetManagerUtil}
+import com.atguigu.gmall0921.realtime.utils.{HbaseUtil, MykafkaSink, MykafkaUtil, OffsetManagerUtil}
 import org.apache.commons.lang3.StringUtils
 import org.apache.kafka.clients.consumer.ConsumerRecord
 import org.apache.kafka.common.TopicPartition
@@ -54,13 +56,14 @@ object BaseDBCanalApp {
     jsonObjDstream.foreachRDD{rdd=>
 
       rdd.foreachPartition{jsonItr=>
-        val dimTables=Array("user_info","base_province")
-        val factTable=Array("order_info","order_detail")
+        val dimTables=Array("user_info","base_province")// 维度表 用户和地区
+        val factTable=Array("order_info","order_detail")// order_info 一个订单一条数据  order_detail 一个订单中每个商品一条数据
         for (jsonObj <- jsonItr ) {
           val table: String = jsonObj.getString("table")
           val optType: String = jsonObj.getString("type")
           val pkNames:JSONArray =  jsonObj.getJSONArray("pkNames")
           val dataArr:JSONArray =  jsonObj.getJSONArray("data")
+
           if(dimTables.contains(table) ){
             //维度处理  -->>hbase
             //  维度表写-->hbase    namespace ?  常量：gmall0921  hbase table?  dim_table DIM_USER_INFO
@@ -76,25 +79,17 @@ object BaseDBCanalApp {
             import  collection.JavaConverters._
             for (data <- dataArr.asScala ) {
               val dataJsonObj: JSONObject = data.asInstanceOf[JSONObject]
+              println(dataJsonObj)
               val pk: String = dataJsonObj.getString(pkName)
               // 用数据的主键 1 先补0 补的位数预计是数据增上限    //再反转
               val rowkey: String = StringUtils.leftPad(pk,10,"0").reverse
-              val namespace:String="GMALL0921"
-              val hbaseTable:String=namespace+":"+"DIM_"+table.toUpperCase
-              val family="INFO"
-              val column_value=data
+              val hbaseTable:String="DIM_"+table.toUpperCase
+              val dataMap: util.Map[String, AnyRef] = dataJsonObj.getInnerMap //key= columnName ,value= value
+
+              HbaseUtil.put(hbaseTable,rowkey,dataMap)
 
                // 练习 把数据存入到hbase中
-
-
             }
-
-
-
-
-
-
-
 
           }
           if(factTable.contains(table)){
@@ -116,6 +111,13 @@ object BaseDBCanalApp {
               val dataJsonObj: JSONObject = data.asInstanceOf[JSONObject]
               MykafkaSink.send(topic,dataJsonObj.toJSONString)
             }
+
+            //也可以用for循环 如下
+//            for(i <- 0 to dataArr.size()){
+//              val dataJsonObj: JSONObject = dataArr.getJSONObject(i)
+//              MykafkaSink.send(topic,dataJsonObj.toJSONString)
+//            }
+
           }
         }
       }
