@@ -16,7 +16,7 @@ object DimInit {
     val tableNameArr: Array[String] = tableNames.split(",")
     for (tableName <- tableNameArr ) {
       // 读取mysql
-      val dataObjList: util.List[JSONObject] = MysqlUtil.queryList("select * from "+tableName)
+      val dataObjList: util.List[JSONObject] = MysqlUtil.queryList("select * from "+tableName) //无法获知主键
       // 写入kafka
      //模仿canal数据的格式 去构造message
       val messageJSONobj=new JSONObject()
@@ -25,7 +25,15 @@ object DimInit {
       messageJSONobj.put("database","gmall0921")
 
       val pkNames = new JSONArray
-      pkNames.add("id")
+      pkNames.add("id")   //应该动态的去mysql中查询表的主键字段  mysql的元数据库 INFORMATION_SCHEMA
+//      #查询某个表的主键
+//      #字段列 角度
+//        SELECT column_name FROM  COLUMNS WHERE table_name='base_province' AND  table_schema='gmall0921' AND column_key='PRI'
+//      #约束
+//      SELECT column_name FROM   `KEY_COLUMN_USAGE`  WHERE  table_name='base_province' AND  table_schema='gmall0921'  AND constraint_name='PRIMARY'
+//    普通业务数据库账号 不见得能查询INFORMATION_SCHEMA库   需要跟数据库运维沟通 获得权限
+
+
       messageJSONobj.put("pkNames",pkNames)
       messageJSONobj.put("table",tableName)
       messageJSONobj.put("type","INSERT")

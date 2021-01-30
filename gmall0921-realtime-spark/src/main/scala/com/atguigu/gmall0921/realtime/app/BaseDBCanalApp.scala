@@ -47,77 +47,77 @@ object BaseDBCanalApp {
     }
 
     //把格式转换为jsonObject 便于中间的业务处理
-    val jsonObjDstream: DStream[JSONObject] = inputDstreamWithOffsetDstream.map(record=> JSON.parseObject(record.value()) )
+    val jsonObjDstream: DStream[JSONObject] = inputDstreamWithOffsetDstream.map(record => JSON.parseObject(record.value()))
 
-// table  ,type ,pkNames, data-->kafka 还是 hbase
-//  清单 那些表是维度表    //常量  配置文件  数据库参数
+    // table  ,type ,pkNames, data-->kafka 还是 hbase
+    //  清单 那些表是维度表    //常量  配置文件  数据库参数
     //  事实表写-->kafka   topic ?  table     message ?  data
     //  维度表写-->hbase    hbase table?  table    rowkey?   pkNames   faimly? 常量info   column - value? data      namespace ?  常量：gmall0921
-    jsonObjDstream.foreachRDD{rdd=>
+    jsonObjDstream.foreachRDD { rdd =>
 
-      rdd.foreachPartition{jsonItr=>
-        val dimTables=Array("user_info","base_province")// 维度表 用户和地区
-        val factTable=Array("order_info","order_detail")// order_info 一个订单一条数据  order_detail 一个订单中每个商品一条数据
-        for (jsonObj <- jsonItr ) {
+      rdd.foreachPartition { jsonItr =>
+        val dimTables = Array("user_info", "base_province") // 维度表 用户和地区
+      val factTable = Array("order_info", "order_detail") // order_info 一个订单一条数据  order_detail 一个订单中每个商品一条数据
+        for (jsonObj <- jsonItr) {
           val table: String = jsonObj.getString("table")
           val optType: String = jsonObj.getString("type")
-          val pkNames:JSONArray =  jsonObj.getJSONArray("pkNames")
-          val dataArr:JSONArray =  jsonObj.getJSONArray("data")
-
-          if(dimTables.contains(table) ){
-            //维度处理  -->>hbase
-            //  维度表写-->hbase    namespace ?  常量：gmall0921  hbase table?  dim_table DIM_USER_INFO
-            //  rowkey?   pkNames   faimly?  常量info   column - value? data
-            //  rowkey   唯一、region //数据分散在不同的机器上还是集中在一起，
-            //  不一定。要看数据的查取场景，如果是用rowkey查询尽量打散 ，如果范围查询可以不打散
-            // 如果需要打散--> 预分区   不需要打散--> 不预分区
-            // 用户表使用rowkey查询 -->预分区   省市表 可以整表查询 -->不做预分区
-            // 用数据的主键 1 先补0 补的位数预计是数据增上限    //再反转
-            //取得数据的 主键
-            val pkName: String =  pkNames.getString(0)
-
-            import  collection.JavaConverters._
-            for (data <- dataArr.asScala ) {
-              val dataJsonObj: JSONObject = data.asInstanceOf[JSONObject]
-              println(dataJsonObj)
-              val pk: String = dataJsonObj.getString(pkName)
+          val pkNames: JSONArray = jsonObj.getJSONArray("pkNames")
+          val dataArr: JSONArray = jsonObj.getJSONArray("data")
+          if (Array("INSERT", "DELETE", "UPDATE").contains(optType)) {
+            if (dimTables.contains(table)) {
+              //维度处理  -->>hbase
+              //  维度表写-->hbase    namespace ?  常量：gmall0921  hbase table?  dim_table DIM_USER_INFO
+              //  rowkey?   pkNames   faimly?  常量info   column - value? data
+              //  rowkey   唯一、region //数据分散在不同的机器上还是集中在一起，
+              //  不一定。要看数据的查取场景，如果是用rowkey查询尽量打散 ，如果范围查询可以不打散
+              // 如果需要打散--> 预分区   不需要打散--> 不预分区
+              // 用户表使用rowkey查询 -->预分区   省市表 可以整表查询 -->不做预分区
               // 用数据的主键 1 先补0 补的位数预计是数据增上限    //再反转
-              val rowkey: String = StringUtils.leftPad(pk,10,"0").reverse
-              val hbaseTable:String="DIM_"+table.toUpperCase
-              val dataMap: util.Map[String, AnyRef] = dataJsonObj.getInnerMap //key= columnName ,value= value
+              //取得数据的 主键
+              val pkName: String = pkNames.getString(0)
 
-              HbaseUtil.put(hbaseTable,rowkey,dataMap)
+              import collection.JavaConverters._
+              for (data <- dataArr.asScala) {
+                val dataJsonObj: JSONObject = data.asInstanceOf[JSONObject]
+                println(dataJsonObj)
+                val pk: String = dataJsonObj.getString(pkName)
+                // 用数据的主键 1 先补0 补的位数预计是数据增上限    //再反转
+                val rowkey: String =HbaseUtil.getDimRowkey(pk)
+                val hbaseTable: String = "DIM_" + table.toUpperCase
+                val dataMap: util.Map[String, AnyRef] = dataJsonObj.getInnerMap //key= columnName ,value= value
 
-               // 练习 把数据存入到hbase中
+                HbaseUtil.put(hbaseTable, rowkey, dataMap)
+
+                // 练习 把数据存入到hbase中
+              }
+
             }
+            if (factTable.contains(table)) {
+              //分流到事实表处理  --> kafka
+              //  事实表写-->kafka   topic ?    层+table+optype   DWD_ORDER_INFO_I   message ?  data
+              var opt: String = null
+              if (optType.equals("INSERT")) {
+                opt = "I"
+              } else if (optType.equals("UPDATE")) {
+                opt = "U"
+              } else if (optType.equals("DELETE")) {
+                opt = "D"
+              }
+              //kafka发送工具？
+              val topic = "DWD_" + table.toUpperCase() + "_" + opt
+              //有可能一条canal的数据 有多行操作 ，要把dataArr遍历
+              import collection.JavaConverters._
+              for (data <- dataArr.asScala) {
+                val dataJsonObj: JSONObject = data.asInstanceOf[JSONObject]
+                MykafkaSink.send(topic, dataJsonObj.toJSONString)
+              }
 
-          }
-          if(factTable.contains(table)){
-            //分流到事实表处理  --> kafka
-            //  事实表写-->kafka   topic ?    层+table+optype   DWD_ORDER_INFO_I   message ?  data
-            var opt:String=null
-            if(optType.equals("INSERT")){
-              opt="I"
-            }else if(optType.equals("UPDATE")){
-              opt="U"
-            }else if(optType.equals("DELETE")){
-              opt="D"
+              //也可以用for循环 如下
+              //            for(i <- 0 to dataArr.size()){
+              //              val dataJsonObj: JSONObject = dataArr.getJSONObject(i)
+              //              MykafkaSink.send(topic,dataJsonObj.toJSONString)
+              //            }
             }
-           //kafka发送工具？
-            val topic="DWD_"+table.toUpperCase()+"_"+opt
-            //有可能一条canal的数据 有多行操作 ，要把dataArr遍历
-            import  collection.JavaConverters._
-            for (data <- dataArr.asScala ) {
-              val dataJsonObj: JSONObject = data.asInstanceOf[JSONObject]
-              MykafkaSink.send(topic,dataJsonObj.toJSONString)
-            }
-
-            //也可以用for循环 如下
-//            for(i <- 0 to dataArr.size()){
-//              val dataJsonObj: JSONObject = dataArr.getJSONObject(i)
-//              MykafkaSink.send(topic,dataJsonObj.toJSONString)
-//            }
-
           }
         }
       }
