@@ -65,6 +65,7 @@ object BaseDBCanalApp {
           val dataArr: JSONArray = jsonObj.getJSONArray("data")
           if (Array("INSERT", "DELETE", "UPDATE").contains(optType)) {
             if (dimTables.contains(table)) {
+
               //维度处理  -->>hbase
               //  维度表写-->hbase    namespace ?  常量：gmall0921  hbase table?  dim_table DIM_USER_INFO
               //  rowkey?   pkNames   faimly?  常量info   column - value? data
@@ -109,14 +110,15 @@ object BaseDBCanalApp {
               import collection.JavaConverters._
               for (data <- dataArr.asScala) {
                 val dataJsonObj: JSONObject = data.asInstanceOf[JSONObject]
+                Thread.sleep(200)
                 MykafkaSink.send(topic, dataJsonObj.toJSONString)
               }
 
               //也可以用for循环 如下
-              //            for(i <- 0 to dataArr.size()){
-              //              val dataJsonObj: JSONObject = dataArr.getJSONObject(i)
-              //              MykafkaSink.send(topic,dataJsonObj.toJSONString)
-              //            }
+//                          for(i <- 0 to dataArr.size()){
+//                            val dataJsonObj: JSONObject = dataArr.getJSONObject(i)
+//                            MykafkaSink.send(topic,dataJsonObj.toJSONString)
+//                          }
             }
           }
         }

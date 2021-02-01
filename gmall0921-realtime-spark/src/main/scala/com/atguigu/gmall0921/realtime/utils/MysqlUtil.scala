@@ -1,8 +1,11 @@
 package com.atguigu.gmall0921.realtime.utils
 
+
+
 import java.sql.{Connection, DriverManager, ResultSet, ResultSetMetaData, Statement}
 
 import com.alibaba.fastjson.JSONObject
+
 
 object MysqlUtil {
 
