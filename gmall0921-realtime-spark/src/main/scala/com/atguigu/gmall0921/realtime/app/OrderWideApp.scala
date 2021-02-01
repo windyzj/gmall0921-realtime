@@ -1,11 +1,13 @@
 package com.atguigu.gmall0921.realtime.app
 
 import java.text.SimpleDateFormat
+import java.util
 import java.util.Date
 
+import com.alibaba.fastjson.serializer.SerializeConfig
 import com.alibaba.fastjson.{JSON, JSONObject}
-import com.atguigu.gmall0921.realtime.bean.{OrderDetail, OrderInfo}
-import com.atguigu.gmall0921.realtime.utils.{HbaseUtil, MykafkaUtil, OffsetManagerUtil}
+import com.atguigu.gmall0921.realtime.bean.{OrderDetail, OrderInfo, OrderWide}
+import com.atguigu.gmall0921.realtime.utils.{HbaseUtil, MykafkaUtil, OffsetManagerUtil, RedisUtil}
 import org.apache.commons.lang3.StringUtils
 import org.apache.commons.lang3.time.DateUtils
 import org.apache.kafka.clients.consumer.ConsumerRecord
@@ -16,8 +18,10 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.streaming.{Seconds, StreamingContext}
 import org.apache.spark.streaming.dstream.{DStream, InputDStream}
 import org.apache.spark.streaming.kafka010.{HasOffsetRanges, OffsetRange}
+import redis.clients.jedis.Jedis
 
 import scala.collection.mutable
+import scala.collection.mutable.ListBuffer
 
 object OrderWideApp {
 
@@ -143,29 +147,69 @@ object OrderWideApp {
    //shuffle
     val orderJoinDstream: DStream[(Long, (OrderInfo, OrderDetail))] = orderInfoWithIdDstream.join(orderDetailWithIdDstream)
 
+//  能不能写一个通用的解决方案  把缓存处理封装起来
+    //    def     DstreamJoinUtil(Dstream[k,v1], Dstream[k,v2]) :  Dstream[(k,(v1,v2))]
 
     val orderFullJoinedDstream: DStream[(Long, (Option[OrderInfo], Option[OrderDetail]))] = orderInfoWithIdDstream.fullOuterJoin(orderDetailWithIdDstream)
-    orderFullJoinedDstream.map{ case(orderId,(orderInfoOption,orderDetailOption))=>
-        if(orderInfoOption!=None){
-            if(orderDetailOption!=None){
-              //1  都不等于None 说明左右两边成功匹配   匹配成功 组成一条宽表数据
-            }
-            //确定主表不等于None
-              //2.1  把主表的数据写入缓存
-              //2.2  尝试读取从表的缓存 和自己匹配     如果匹配成功  组成一条宽表数据
-        }else{ //如果主表为None ， 从表一定不为None
-             //3.1  把从表的数据写入缓存
-             //3.2  尝试读取主表的缓存 和自己匹配     如果匹配成功  组成一条宽表数据
 
+    val orderWideDStream: DStream[OrderWide] = orderFullJoinedDstream.flatMap { case (orderId, (orderInfoOption, orderDetailOption)) =>
+      val orderWideList: ListBuffer[OrderWide] = ListBuffer[OrderWide]()
+      val jedis: Jedis = RedisUtil.getJedisClient
+      if (orderInfoOption != None) {
+        val orderInfo: OrderInfo = orderInfoOption.get
+        if (orderDetailOption != None) {
+          val orderDetail: OrderDetail = orderDetailOption.get
+          //1  都不等于None 说明左右两边成功匹配   匹配成功 组成一条宽表数据
+          // 增加了一个宽表类 OrderWide=OrderInfo+OrderDetail
+          val orderWide = new OrderWide(orderInfo, orderDetail)
+          orderWideList.append(orderWide)
         }
+        //确定主表不等于None
+        //2.1  把主表的数据写入缓存
+        //设计redis ?   type?  string      key?   ORDER_INFO:+order_id     field(score) value? orderInfoJson       expire ? 600秒    api 读写 ? get +setex
+        // 场景是从表通过order_id 查询主表信息
+        val orderInfoKey = "ORDER_INFO:" + orderInfo.id
+        //可以使用专业json4s  scala json转换工具
+        val orderInfoJson = JSON.toJSONString(orderInfo, new SerializeConfig(true))
+        jedis.setex(orderInfoKey, 600, orderInfoJson)
+        //2.2  尝试读取从表的缓存 和自己匹配     如果匹配成功  组成一条宽表数据
+        val orderDetailKey = "ORDER_DETAIL:" + orderInfo.id
+        val orderDetailSet: util.Set[String] = jedis.smembers(orderDetailKey)
+        if (orderDetailSet != null && orderDetailSet.size() > 0) {
+          import collection.JavaConverters._
+          for (orderDetailJson <- orderDetailSet.asScala) {
+            val orderDetail: OrderDetail = JSON.parseObject(orderDetailJson, classOf[OrderDetail])
+            //组成一条宽表数据
+            val orderWide = new OrderWide(orderInfo, orderDetail)
+            orderWideList.append(orderWide)
+          }
+        }
+      } else { //如果主表为None ， 从表一定不为None
+        //3.1  把从表的数据写入缓存  orderDetail
+        // 场景：主表通过order_id查从表缓存
+        val orderDetail: OrderDetail = orderDetailOption.get
+        // 设计redis ？ type ?   set    key ?  ORDER_DETAIL:+ order_id      value?  orderDetailJsons   expire?  600  api?  sadd    smembers
+        val orderDetailKey = "ORDER_DETAIL:" + orderDetail.order_id
+        val orderDetailJson = JSON.toJSONString(orderDetail, new SerializeConfig(true))
+        jedis.sadd(orderDetailKey, orderDetailJson)
+        jedis.expire(orderDetailKey, 600)
+        //3.2  尝试读取主表的缓存 和自己匹配     如果匹配成功  组成一条宽表数据
+        val orderInfoKey = "ORDER_INFO:" + orderDetail.order_id
+        val orderInfoJson: String = jedis.get(orderInfoKey)
+        if (orderInfoJson != null && orderInfoJson.length() > 0) {
+          val orderInfo: OrderInfo = JSON.parseObject(orderInfoJson, classOf[OrderInfo])
+          val orderWide = new OrderWide(orderInfo, orderDetail)
+          orderWideList.append(orderWide)
+        }
+      }
 
 
-
-
-
+      jedis.close()
+      orderWideList
     }
 
-    orderJoinDstream.print(1000)
+
+    orderWideDStream.print(1000)
 
 
 
