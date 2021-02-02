@@ -7,7 +7,7 @@ import java.util.Date
 import com.alibaba.fastjson.serializer.SerializeConfig
 import com.alibaba.fastjson.{JSON, JSONObject}
 import com.atguigu.gmall0921.realtime.bean.{OrderDetail, OrderInfo, OrderWide}
-import com.atguigu.gmall0921.realtime.utils.{HbaseUtil, MykafkaUtil, OffsetManagerUtil, RedisUtil}
+import com.atguigu.gmall0921.realtime.utils.{HbaseUtil, MyEsUtil, MykafkaUtil, OffsetManagerUtil, RedisUtil}
 import org.apache.commons.lang3.StringUtils
 import org.apache.commons.lang3.time.DateUtils
 import org.apache.kafka.clients.consumer.ConsumerRecord
@@ -22,6 +22,7 @@ import redis.clients.jedis.Jedis
 
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
+
 
 object OrderWideApp {
 
@@ -208,9 +209,28 @@ object OrderWideApp {
       orderWideList
     }
 
+     orderWideDStream.cache()
+     orderWideDStream.print(1000)
 
-    orderWideDStream.print(1000)
+     //写入es
+    orderWideDStream.foreachRDD{rdd=>
 
+      rdd.foreachPartition{orderWideItr=>  //iterator 只能迭代一次
+        val orderWideList: List[OrderWide] = orderWideItr.toList
+        if(orderWideList.size!=0){
+          val dateFormat = new SimpleDateFormat("yyyy-MM-dd")
+          val dateStr: String = dateFormat.format(new Date)
+          val indexName="gmall0921_order_wide_"+dateStr
+          val orderWideWithIdList: List[(String, OrderWide)] = orderWideList.map(orderWide=>(orderWide.detail_id.toString,orderWide)).toList
+           MyEsUtil.saveBulk(indexName,orderWideWithIdList)
+        }
+      }
+
+      OffsetManagerUtil.saveOffset(orderInfoTopic,groupid ,orderInfoOffsetRanges)
+      OffsetManagerUtil.saveOffset(orderDetailTopic,groupid ,orderDetailOffsetRanges)
+
+
+    }
 
 
 
@@ -219,10 +239,6 @@ object OrderWideApp {
 
     ssc.start()
     ssc.awaitTermination()
-
-
-
-
 
   }
 
