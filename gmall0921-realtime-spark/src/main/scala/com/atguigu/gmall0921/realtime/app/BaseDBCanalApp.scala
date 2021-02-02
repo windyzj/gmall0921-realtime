@@ -53,10 +53,11 @@ object BaseDBCanalApp {
     //  清单 那些表是维度表    //常量  配置文件  数据库参数
     //  事实表写-->kafka   topic ?  table     message ?  data
     //  维度表写-->hbase    hbase table?  table    rowkey?   pkNames   faimly? 常量info   column - value? data      namespace ?  常量：gmall0921
+
     jsonObjDstream.foreachRDD { rdd =>
 
       rdd.foreachPartition { jsonItr =>
-        val dimTables = Array("user_info", "base_province") // 维度表 用户和地区
+      val dimTables = Array("user_info", "base_province") // 维度表 用户和地区
       val factTable = Array("order_info", "order_detail") // order_info 一个订单一条数据  order_detail 一个订单中每个商品一条数据
         for (jsonObj <- jsonItr) {
           val table: String = jsonObj.getString("table")
@@ -111,7 +112,17 @@ object BaseDBCanalApp {
               for (data <- dataArr.asScala) {
                 val dataJsonObj: JSONObject = data.asInstanceOf[JSONObject]
                // Thread.sleep(200)
-                MykafkaSink.send(topic, dataJsonObj.toJSONString)
+                if(table.equals("order_info")){
+                  val partitionKey: String = dataJsonObj.getString("id")
+                  MykafkaSink.send(topic, partitionKey,dataJsonObj.toJSONString)
+                }else if(table.equals("order_detail")){
+                  val partitionKey: String = dataJsonObj.getString("order_id")
+                  MykafkaSink.send(topic, partitionKey,dataJsonObj.toJSONString)
+                }
+                else{
+                  MykafkaSink.send(topic, dataJsonObj.toJSONString)
+                }
+
               }
 
               //也可以用for循环 如下
