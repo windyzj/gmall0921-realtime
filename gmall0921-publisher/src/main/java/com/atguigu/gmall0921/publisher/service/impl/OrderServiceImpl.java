@@ -12,6 +12,8 @@ import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregationBuilde
 import org.elasticsearch.search.aggregations.metrics.sum.SumAggregationBuilder;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
+import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -19,10 +21,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+@Service
 public class OrderServiceImpl implements OrderService {
 
     @Autowired
     JestClient jestClient;
+
+    String DAU_INDEX_PREFIX="gmall0921_order_wide_";
+    String DAU_INDEX_SUFFIX="-query";
 
     @Override
     public Map getOrderStats(String date, String keyword, int startPageNo, int pageSize) {
@@ -40,7 +46,8 @@ public class OrderServiceImpl implements OrderService {
         searchSourceBuilder.aggregation(ageAggs);
         searchSourceBuilder.aggregation(genderAggs);
 
-        Search search = new Search.Builder(searchSourceBuilder.toString()).build();
+        String indexName= DAU_INDEX_PREFIX+date+DAU_INDEX_SUFFIX;
+        Search search = new Search.Builder(searchSourceBuilder.toString()).addIndex(indexName).addType("_doc").build();
         Map resultMap=new HashMap();
         try {
             SearchResult searchResult = jestClient.execute(search);
